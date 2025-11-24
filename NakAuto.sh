@@ -404,9 +404,35 @@ EOF
                 
                 success "Configuration créée"
                 
-                info "Redémarrage du réseau..."
-                systemctl restart networking
-                success "Réseau redémarré"
+                info "Application de la configuration réseau..."
+                
+                # Méthode 1 : ifdown/ifup (plus fiable pour LXC)
+                ifdown $INTERFACE 2>/dev/null
+                sleep 1
+                ifup $INTERFACE 2>/dev/null
+                
+                # Vérifier si l'IP est bien appliquée
+                sleep 2
+                if ip addr show $INTERFACE | grep -q "$STATIC_IP"; then
+                    success "Configuration réseau appliquée avec succès"
+                else
+                    # Méthode 2 : Application manuelle si ifup a échoué
+                    info "Application manuelle de la configuration..."
+                    ip addr flush dev $INTERFACE
+                    ip addr add $STATIC_IP$(echo $NETMASK | grep -q '/' && echo '' || echo '/24') dev $INTERFACE
+                    ip link set $INTERFACE up
+                    ip route add default via $GATEWAY 2>/dev/null
+                    
+                    # Configurer le DNS
+                    echo "nameserver $DNS1" > /etc/resolv.conf
+                    [ -n "$DNS2" ] && echo "nameserver $DNS2" >> /etc/resolv.conf
+                    
+                    if ip addr show $INTERFACE | grep -q "$STATIC_IP"; then
+                        success "Configuration réseau appliquée manuellement"
+                    else
+                        error "Échec de la configuration réseau"
+                    fi
+                fi
             fi
         else
             info "Configuration annulée"
