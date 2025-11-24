@@ -302,24 +302,38 @@ configure_network() {
         
         # Détecter l'interface réseau principale
         INTERFACE=$(ip route | grep default | awk '{print $5}' | head -n1)
+        
+        # Si pas de route par défaut, prendre la première interface UP (hors loopback)
+        if [ -z "$INTERFACE" ]; then
+            INTERFACE=$(ip -o link show | awk -F': ' '{print $2}' | grep -v lo | head -n1)
+        fi
+        
+        # Nettoyer le nom de l'interface (enlever @ifXX pour LXC)
+        INTERFACE=$(echo $INTERFACE | cut -d'@' -f1)
+        
         info "Interface réseau détectée: ${INTERFACE}"
         
         # Demander les informations réseau
         echo ""
         ask "Adresse IP statique (ex: 192.168.1.100):"
         read STATIC_IP
+        STATIC_IP=$(echo $STATIC_IP | xargs)  # Trim whitespace
         
         ask "Masque de sous-réseau (ex: 255.255.255.0 ou /24):"
         read NETMASK
+        NETMASK=$(echo $NETMASK | xargs)
         
         ask "Passerelle par défaut (ex: 192.168.1.1):"
         read GATEWAY
+        GATEWAY=$(echo $GATEWAY | xargs | sed 's/\.$//')  # Trim et enlever point final
         
         ask "Serveur DNS primaire (ex: 8.8.8.8):"
         read DNS1
+        DNS1=$(echo $DNS1 | xargs)
         
         ask "Serveur DNS secondaire (ex: 8.8.4.4) [optionnel]:"
         read DNS2
+        DNS2=$(echo $DNS2 | xargs)
         
         echo ""
         info "Résumé de la configuration:"
