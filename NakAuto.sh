@@ -205,11 +205,12 @@ install_packages() {
     echo -e "${CYAN}  • htop, tree, net-tools${NC}"
     echo -e "${CYAN}  • python3, python3-pip${NC}"
     echo -e "${CYAN}  • build-essential${NC}"
+    echo -e "${CYAN}  • sudo${NC}"
     echo ""
     
     if confirm "Voulez-vous installer ces paquets ?"; then
         echo ""
-        PACKAGES="nano vim git curl wget htop tree net-tools python3 python3-pip build-essential"
+        PACKAGES="nano vim git curl wget htop tree net-tools python3 python3-pip build-essential sudo"
         
         info "Installation en cours..."
         apt install -y $PACKAGES > /tmp/install.log 2>&1 &
