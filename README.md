@@ -5,9 +5,10 @@
 ## Fonctionnalités
 
 - Mise à jour du système
-- Installation des paquets de base (sudo, ssh, wget, curl, vim, git, ufw)
+- Installation des paquets de base (sudo, ssh, wget, curl, vim, git, ufw, nano)
 - Ajout d'un utilisateur au groupe sudo
 - Configuration du pare-feu pour autoriser SSH
+- Adressage IP statique
 
 ## Utilisation
 
