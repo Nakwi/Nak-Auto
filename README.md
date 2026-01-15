@@ -1,6 +1,6 @@
 # Nak-Auto Script
 
-✨ **Nak-Auto Script** est un script de configuration automatique pour les machines Debian. Ce script installe les paquets de base, configure le pare-feu, et met en place un environnement de base pour les utilisateurs.
+**Nak-Auto Script** est un script de configuration automatique pour les machines Debian. Ce script installe les paquets de base, configure le pare-feu, et met en place un environnement de base pour les utilisateurs.
 
 ## Fonctionnalités
 
