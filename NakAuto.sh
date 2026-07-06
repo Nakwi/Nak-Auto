@@ -6,181 +6,153 @@
 set -euo pipefail
 
 # ------------------------------------------------------------------
-# CONFIG PAR DÉFAUT — personnalise ici
+# CONFIG — personnalise ici
 # ------------------------------------------------------------------
 DEFAULT_USER="ryan"
-DEFAULT_HOSTNAME="$(hostname)"
-DEFAULT_TZ="Europe/Paris"
-# Colle ta clé publique SSH ici pour ne plus la retaper à chaque fois :
-DEFAULT_SSH_PUBKEY=""
+TZ="Europe/Paris"
+PKGS="curl wget sudo nano vim git gh htop tree ncdu rsync unzip zip \
+ca-certificates gnupg net-tools dnsutils qemu-guest-agent"
 
-PKGS_BASE="curl wget sudo nano htop git unzip ca-certificates gnupg net-tools"
-PKGS_EXTRA_LIST=(
-    "qemu-guest-agent" "Agent invité Proxmox (IP visible, shutdown propre)" ON
-    "vim" "Éditeur vim" OFF
-    "tmux" "Multiplexeur de terminal" OFF
-    "tree" "Arborescence de fichiers" ON
-    "ncdu" "Analyse d'espace disque" ON
-    "rsync" "Synchronisation de fichiers" ON
-    "fail2ban" "Protection anti-bruteforce SSH" OFF
-    "unattended-upgrades" "MAJ de sécurité automatiques" OFF
-)
+# ------------------------------------------------------------------
+# Couleurs & helpers
+# ------------------------------------------------------------------
+R='\033[0;31m'; G='\033[0;32m'; Y='\033[1;33m'; B='\033[1;34m'
+C='\033[0;36m'; W='\033[1;37m'; D='\033[0;90m'; N='\033[0m'
+
+ok()    { echo -e "  ${G}✔${N} $1"; }
+info()  { echo -e "  ${C}ℹ${N} $1"; }
+warn()  { echo -e "  ${Y}⚠${N} $1"; }
+err()   { echo -e "  ${R}✖${N} $1"; }
+step()  { echo -e "\n${B}▶ $1${N}"; }
+
+ask() { # ask "question" "défaut" -> réponse
+    local q="$1" def="${2:-}" ans
+    if [[ -n "$def" ]]; then
+        read -rp "$(echo -e "  ${W}?${N} $q ${D}[$def]${N} : ")" ans
+        echo "${ans:-$def}"
+    else
+        read -rp "$(echo -e "  ${W}?${N} $q : ")" ans
+        echo "$ans"
+    fi
+}
+
+ask_yn() { # ask_yn "question" "y|n(défaut)" -> 0 si oui
+    local q="$1" def="${2:-y}" ans
+    read -rp "$(echo -e "  ${W}?${N} $q ${D}[$( [[ $def == y ]] && echo O/n || echo o/N )]${N} : ")" ans
+    ans="${ans:-$def}"
+    [[ "${ans,,}" == "y" || "${ans,,}" == "o" || "${ans,,}" == "oui" ]]
+}
 
 # ------------------------------------------------------------------
 # Pré-vols
 # ------------------------------------------------------------------
 if [[ $EUID -ne 0 ]]; then
-    echo "❌ Lance ce script en root : sudo bash $0"
+    err "Lance ce script en root : sudo bash $0"
     exit 1
 fi
-
 export DEBIAN_FRONTEND=noninteractive
 
-if ! command -v whiptail &>/dev/null; then
-    echo "→ Installation de whiptail..."
-    apt-get update -qq && apt-get install -y -qq whiptail
+clear
+echo -e "${C}"
+cat <<'BANNER'
+  ┌─────────────────────────────────────────────┐
+  │   ⚙  BOOTSTRAP HOMELAB — naki edition       │
+  │      Post-install Debian / Ubuntu           │
+  └─────────────────────────────────────────────┘
+BANNER
+echo -e "${N}"
+info "Machine  : $(hostname)"
+info "OS       : $(. /etc/os-release && echo "$PRETTY_NAME")"
+info "IP       : $(hostname -I | awk '{print $1}')"
+echo ""
+
+# ------------------------------------------------------------------
+# Questions (tout d'un coup, ensuite ça déroule)
+# ------------------------------------------------------------------
+NEW_HOSTNAME=$(ask "Hostname de la machine" "$(hostname)")
+NEWUSER=$(ask "Utilisateur à créer" "$DEFAULT_USER")
+
+PASS1=""; PASS2="x"
+if id "$NEWUSER" &>/dev/null; then
+    info "L'utilisateur $NEWUSER existe déjà — pas de création."
+else
+    while [[ "$PASS1" != "$PASS2" || -z "$PASS1" ]]; do
+        read -srp "$(echo -e "  ${W}?${N} Mot de passe pour $NEWUSER : ")" PASS1; echo
+        read -srp "$(echo -e "  ${W}?${N} Confirmation : ")" PASS2; echo
+        [[ "$PASS1" != "$PASS2" ]] && warn "Les mots de passe ne correspondent pas, réessaie."
+        [[ -z "$PASS1" ]] && warn "Mot de passe vide interdit."
+    done
 fi
 
-BACKTITLE="Bootstrap Homelab — naki edition"
+INSTALL_DOCKER=false
+ask_yn "Installer Docker + Docker Compose ?" "n" && INSTALL_DOCKER=true
 
-msg() { whiptail --backtitle "$BACKTITLE" --title "$1" --msgbox "$2" 12 70; }
-
-# ------------------------------------------------------------------
-# 1. Menu principal : quoi faire ?
-# ------------------------------------------------------------------
-CHOICES=$(whiptail --backtitle "$BACKTITLE" --title "Que veux-tu faire ?" \
-    --checklist "Sélectionne les étapes (ESPACE pour cocher) :" 20 75 10 \
-    "update"    "Mise à jour complète du système"            ON \
-    "hostname"  "Changer le hostname"                        OFF \
-    "timezone"  "Régler la timezone ($DEFAULT_TZ)"           ON \
-    "user"      "Créer un utilisateur + sudo"                ON \
-    "sshkey"    "Ajouter une clé SSH publique à l'user"      ON \
-    "packages"  "Installer les paquets de base + extras"     ON \
-    "docker"    "Installer Docker + Docker Compose"          OFF \
-    3>&1 1>&2 2>&3) || { echo "Annulé."; exit 0; }
-
-has() { [[ "$CHOICES" == *"\"$1\""* ]]; }
+echo ""
+echo -e "${D}──────────────────────────────────────────────${N}"
 
 # ------------------------------------------------------------------
-# 2. Mise à jour système
+# 1. Mise à jour système
 # ------------------------------------------------------------------
-if has update; then
-    echo "═══ Mise à jour du système ═══"
-    apt-get update
-    apt-get -y full-upgrade
-    apt-get -y autoremove --purge
-fi
+step "Mise à jour du système"
+apt-get update -qq
+apt-get -y -qq full-upgrade
+apt-get -y -qq autoremove --purge
+ok "Système à jour."
 
 # ------------------------------------------------------------------
-# 3. Hostname
+# 2. Hostname
 # ------------------------------------------------------------------
-if has hostname; then
-    NEW_HOSTNAME=$(whiptail --backtitle "$BACKTITLE" --title "Hostname" \
-        --inputbox "Nouveau hostname :" 10 60 "$DEFAULT_HOSTNAME" \
-        3>&1 1>&2 2>&3) || true
-    if [[ -n "${NEW_HOSTNAME:-}" && "$NEW_HOSTNAME" != "$(hostname)" ]]; then
-        hostnamectl set-hostname "$NEW_HOSTNAME"
-        sed -i "s/127.0.1.1.*/127.0.1.1\t$NEW_HOSTNAME/" /etc/hosts || \
-            echo -e "127.0.1.1\t$NEW_HOSTNAME" >> /etc/hosts
-        echo "✔ Hostname : $NEW_HOSTNAME"
+if [[ "$NEW_HOSTNAME" != "$(hostname)" ]]; then
+    step "Hostname"
+    hostnamectl set-hostname "$NEW_HOSTNAME"
+    if grep -q "^127.0.1.1" /etc/hosts; then
+        sed -i "s/^127.0.1.1.*/127.0.1.1\t$NEW_HOSTNAME/" /etc/hosts
+    else
+        echo -e "127.0.1.1\t$NEW_HOSTNAME" >> /etc/hosts
     fi
+    ok "Hostname : $NEW_HOSTNAME"
 fi
 
 # ------------------------------------------------------------------
-# 4. Timezone
+# 3. Timezone
 # ------------------------------------------------------------------
-if has timezone; then
-    timedatectl set-timezone "$DEFAULT_TZ"
-    echo "✔ Timezone : $DEFAULT_TZ"
-fi
+step "Timezone"
+timedatectl set-timezone "$TZ"
+ok "Timezone : $TZ"
+
+# ------------------------------------------------------------------
+# 4. Paquets de base
+# ------------------------------------------------------------------
+step "Installation des paquets de base"
+echo -e "  ${D}$PKGS${N}"
+apt-get install -y -qq $PKGS 2>/dev/null || {
+    # gh n'existe pas sur certaines vieilles versions -> retry sans lui
+    warn "Un paquet a échoué, nouvelle tentative sans 'gh'..."
+    apt-get install -y -qq ${PKGS/gh /}
+}
+systemctl enable --now qemu-guest-agent &>/dev/null || true
+ok "Paquets installés."
 
 # ------------------------------------------------------------------
 # 5. Utilisateur
 # ------------------------------------------------------------------
-NEWUSER=""
-if has user; then
-    NEWUSER=$(whiptail --backtitle "$BACKTITLE" --title "Utilisateur" \
-        --inputbox "Nom de l'utilisateur à créer :" 10 60 "$DEFAULT_USER" \
-        3>&1 1>&2 2>&3) || true
-
-    if [[ -n "$NEWUSER" ]]; then
-        if id "$NEWUSER" &>/dev/null; then
-            echo "ℹ L'utilisateur $NEWUSER existe déjà, on passe la création."
-        else
-            PASS1=$(whiptail --backtitle "$BACKTITLE" --passwordbox \
-                "Mot de passe pour $NEWUSER :" 10 60 3>&1 1>&2 2>&3)
-            PASS2=$(whiptail --backtitle "$BACKTITLE" --passwordbox \
-                "Confirme le mot de passe :" 10 60 3>&1 1>&2 2>&3)
-            if [[ "$PASS1" != "$PASS2" || -z "$PASS1" ]]; then
-                msg "Erreur" "Les mots de passe ne correspondent pas. Utilisateur non créé."
-            else
-                useradd -m -s /bin/bash "$NEWUSER"
-                echo "$NEWUSER:$PASS1" | chpasswd
-                echo "✔ Utilisateur $NEWUSER créé."
-            fi
-        fi
-        # sudo dans tous les cas (idempotent)
-        apt-get install -y -qq sudo
-        usermod -aG sudo "$NEWUSER"
-        echo "✔ $NEWUSER ajouté au groupe sudo."
-    fi
+step "Utilisateur"
+if ! id "$NEWUSER" &>/dev/null; then
+    useradd -m -s /bin/bash "$NEWUSER"
+    echo "$NEWUSER:$PASS1" | chpasswd
+    ok "Utilisateur $NEWUSER créé."
 fi
+usermod -aG sudo "$NEWUSER"
+ok "$NEWUSER est dans le groupe sudo."
 
 # ------------------------------------------------------------------
-# 6. Clé SSH
+# 6. Docker (optionnel)
 # ------------------------------------------------------------------
-if has sshkey; then
-    TARGET_USER="${NEWUSER:-$DEFAULT_USER}"
-    if id "$TARGET_USER" &>/dev/null; then
-        PUBKEY=$(whiptail --backtitle "$BACKTITLE" --title "Clé SSH publique" \
-            --inputbox "Colle la clé publique pour $TARGET_USER :" 12 75 "$DEFAULT_SSH_PUBKEY" \
-            3>&1 1>&2 2>&3) || true
-        if [[ "$PUBKEY" == ssh-* ]]; then
-            USER_HOME=$(getent passwd "$TARGET_USER" | cut -d: -f6)
-            mkdir -p "$USER_HOME/.ssh"
-            touch "$USER_HOME/.ssh/authorized_keys"
-            grep -qxF "$PUBKEY" "$USER_HOME/.ssh/authorized_keys" || \
-                echo "$PUBKEY" >> "$USER_HOME/.ssh/authorized_keys"
-            chmod 700 "$USER_HOME/.ssh"
-            chmod 600 "$USER_HOME/.ssh/authorized_keys"
-            chown -R "$TARGET_USER:$TARGET_USER" "$USER_HOME/.ssh"
-            echo "✔ Clé SSH installée pour $TARGET_USER."
-        else
-            msg "Clé invalide" "La clé doit commencer par ssh-ed25519 ou ssh-rsa. Étape ignorée."
-        fi
-    else
-        msg "Erreur" "L'utilisateur $TARGET_USER n'existe pas, clé SSH ignorée."
-    fi
-fi
-
-# ------------------------------------------------------------------
-# 7. Paquets
-# ------------------------------------------------------------------
-if has packages; then
-    EXTRAS=$(whiptail --backtitle "$BACKTITLE" --title "Paquets supplémentaires" \
-        --checklist "Base déjà incluse : $PKGS_BASE\n\nExtras :" 20 75 8 \
-        "${PKGS_EXTRA_LIST[@]}" \
-        3>&1 1>&2 2>&3) || true
-    EXTRAS=$(echo "$EXTRAS" | tr -d '"')
-    echo "═══ Installation des paquets ═══"
-    apt-get install -y $PKGS_BASE $EXTRAS
-    if [[ "$EXTRAS" == *qemu-guest-agent* ]]; then
-        systemctl enable --now qemu-guest-agent || true
-    fi
-    if [[ "$EXTRAS" == *fail2ban* ]]; then
-        systemctl enable --now fail2ban || true
-    fi
-    echo "✔ Paquets installés."
-fi
-
-# ------------------------------------------------------------------
-# 8. Docker
-# ------------------------------------------------------------------
-if has docker; then
+if $INSTALL_DOCKER; then
+    step "Docker"
     if command -v docker &>/dev/null; then
-        echo "ℹ Docker déjà installé."
+        info "Docker déjà installé."
     else
-        echo "═══ Installation de Docker ═══"
         install -m 0755 -d /etc/apt/keyrings
         . /etc/os-release
         curl -fsSL "https://download.docker.com/linux/${ID}/gpg" \
@@ -189,24 +161,35 @@ if has docker; then
         echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] \
 https://download.docker.com/linux/${ID} ${VERSION_CODENAME} stable" \
             > /etc/apt/sources.list.d/docker.list
-        apt-get update
-        apt-get install -y docker-ce docker-ce-cli containerd.io \
+        apt-get update -qq
+        apt-get install -y -qq docker-ce docker-ce-cli containerd.io \
             docker-buildx-plugin docker-compose-plugin
         systemctl enable --now docker
-        echo "✔ Docker installé."
+        ok "Docker installé."
     fi
-    if [[ -n "${NEWUSER:-}" ]] && id "$NEWUSER" &>/dev/null; then
-        usermod -aG docker "$NEWUSER"
-        echo "✔ $NEWUSER ajouté au groupe docker."
-    fi
+    usermod -aG docker "$NEWUSER"
+    ok "$NEWUSER est dans le groupe docker."
 fi
 
 # ------------------------------------------------------------------
 # Résumé
 # ------------------------------------------------------------------
 IP=$(hostname -I | awk '{print $1}')
-msg "Terminé 🎉" "Machine prête !\n\nHostname : $(hostname)\nIP       : $IP\nUser     : ${NEWUSER:-non créé}\n\nPense à tester la connexion SSH par clé avant de fermer cette session."
 echo ""
-echo "═══════════════════════════════════════"
-echo " ✔ Bootstrap terminé — $(hostname) ($IP)"
-echo "═══════════════════════════════════════"
+echo -e "${G}"
+cat <<'DONE'
+  ┌─────────────────────────────────────────────┐
+  │            ✔  MACHINE PRÊTE  🎉             │
+  └─────────────────────────────────────────────┘
+DONE
+echo -e "${N}"
+echo -e "  ${W}Hostname${N} : $(hostname)"
+echo -e "  ${W}IP${N}       : $IP"
+echo -e "  ${W}User${N}     : $NEWUSER (sudo$($INSTALL_DOCKER && echo ", docker"))"
+echo -e "  ${W}SSH${N}      : ssh $NEWUSER@$IP"
+echo ""
+$INSTALL_DOCKER && warn "Groupe docker : déconnecte/reconnecte $NEWUSER pour l'activer."
+if [[ "$NEW_HOSTNAME" != "$(cat /proc/sys/kernel/hostname 2>/dev/null || hostname)" ]]; then
+    info "Un reboot est conseillé pour finaliser le hostname."
+fi
+echo ""
